@@ -1,0 +1,43 @@
+name: Fork Wheels
+
+# Personal-fork helper: build a Linux wheel from a feature branch so it can be
+# installed on a cloud runner. Not part of upstream CI; drop before a PR.
+on:
+  push:
+    branches:
+      - ian/more-specific-vritual
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ./icechunk-python
+
+jobs:
+  build-wheels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        with:
+          working-directory: icechunk-python
+          args: --release --out dist -i python3.12
+          sccache: true
+          manylinux: auto
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fork-wheels
+          path: icechunk-python/dist
