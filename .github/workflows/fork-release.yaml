@@ -1,23 +1,17 @@
 name: Fork Release
 
-# Personal-fork helper: build the full wheel matrix from a feature branch and
+# Personal-fork helper: build the full wheel matrix from a tagged commit and
 # publish them as assets on a GitHub *prerelease* on the fork. Does NOT publish
-# to PyPI or Anaconda. Drop before upstreaming.
+# to PyPI or Anaconda. Tag-triggered so it needs no presence on the default
+# branch: push a `fork-*` tag and the release is named after it. Drop before
+# upstreaming.
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag to create/update'
-        required: true
-        default: 'coalescing-wip'
-      prerelease:
-        description: 'Mark as prerelease'
-        required: true
-        default: true
-        type: boolean
+  push:
+    tags:
+      - 'fork-*'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.tag }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -168,19 +162,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ inputs.tag }}
-          PRERELEASE: ${{ inputs.prerelease }}
+          TAG: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
-          REF_NAME: ${{ github.ref_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          NOTES="Fork build of \`${REF_NAME}\` @ \`${SHA}\`. Not a PyPI release. Built by ${RUN_URL}."
-          # Recreate the release so re-runs replace stale assets rather than erroring.
+          NOTES="Fork build @ \`${SHA}\`. Not a PyPI release. Built by ${RUN_URL}."
+          # Replace an existing release for this tag so re-runs refresh assets;
+          # keep the git tag itself (no --cleanup-tag).
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release delete "${TAG}" --yes --cleanup-tag
+            gh release delete "${TAG}" --yes
           fi
           gh release create "${TAG}" dist/* \
-            --target "${SHA}" \
             --title "${TAG}" \
             --notes "${NOTES}" \
-            $([ "${PRERELEASE}" = "true" ] && echo --prerelease)
+            --prerelease
