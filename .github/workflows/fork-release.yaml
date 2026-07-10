@@ -1,0 +1,186 @@
+name: Fork Release
+
+# Personal-fork helper: build the full wheel matrix from a feature branch and
+# publish them as assets on a GitHub *prerelease* on the fork. Does NOT publish
+# to PyPI or Anaconda. Drop before upstreaming.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create/update'
+        required: true
+        default: 'coalescing-wip'
+      prerelease:
+        description: 'Mark as prerelease'
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_INTERPRETER: "python3.12"
+
+defaults:
+  run:
+    working-directory: ./icechunk-python
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - target: x86_64
+            manylinux: auto
+          - target: aarch64
+            manylinux: 2_28
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+      - name: Build wheels
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --sdist --out dist -i ${{ env.PYTHON_INTERPRETER }}
+          rust-toolchain: stable
+          manylinux: ${{ matrix.platform.manylinux }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-linux-${{ matrix.platform.target }}
+          path: icechunk-python/dist
+
+  musllinux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - target: x86_64
+          - target: aarch64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: 3.x
+      - name: Build wheels
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
+          rust-toolchain: stable
+          manylinux: musllinux_1_2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-musllinux-${{ matrix.platform.target }}
+          path: icechunk-python/dist
+
+  windows:
+    runs-on: windows-latest
+    # aws-lc-sys compiles AWS-LC's C source, which uses C11 atomics. MSVC only
+    # enables those under /experimental:c11atomics; pass the flag via aws-lc-sys's
+    # own CFLAGS var. https://github.com/aws/aws-lc-rs/issues/961
+    env:
+      AWS_LC_SYS_CFLAGS: "-std:c11 -experimental:c11atomics"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: 3.x
+          architecture: x64
+      - name: Build wheels
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        with:
+          working-directory: icechunk-python
+          target: x64
+          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
+          rust-toolchain: stable
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-windows-x64
+          path: icechunk-python/dist
+
+  macos:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: macos-15-intel
+            target: x86_64
+          - runner: macos-14
+            target: aarch64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: 3.x
+      - name: Build wheels
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
+          rust-toolchain: stable
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-macos-${{ matrix.platform.target }}
+          path: icechunk-python/dist
+
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: [linux, musllinux, windows, macos]
+    # Publish whatever built even if a platform failed (mirrors the nightly job).
+    if: ${{ always() }}
+    permissions:
+      contents: write # create the release and upload assets
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Ensure there is something to upload
+        run: |
+          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "::error title=Nothing to upload::No wheels were built by any job."
+            exit 1
+          fi
+          echo "Assets to attach:"
+          ls -R dist
+      - name: Create or update GitHub release with wheel assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          NOTES="Fork build of \`${REF_NAME}\` @ \`${SHA}\`. Not a PyPI release. Built by ${RUN_URL}."
+          # Recreate the release so re-runs replace stale assets rather than erroring.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release delete "${TAG}" --yes --cleanup-tag
+          fi
+          gh release create "${TAG}" dist/* \
+            --target "${SHA}" \
+            --title "${TAG}" \
+            --notes "${NOTES}" \
+            $([ "${PRERELEASE}" = "true" ] && echo --prerelease)
