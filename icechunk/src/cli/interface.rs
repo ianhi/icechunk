@@ -22,10 +22,14 @@ use crate::storage::{
 use crate::{Repository, RepositoryConfig, Storage, new_s3_storage};
 
 use crate::cli::config::{CliConfig, RepositoryAlias, RepositoryDefinition};
-use crate::config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options};
+use crate::config::{
+    AzureCredentials, GcsCredentials, ManifestConfig, ManifestPreloadConfig,
+    S3Credentials, S3Options,
+};
 use dirs::config_dir;
 
 use super::config::{AzureRepoLocation, RepoLocation};
+use super::inspect::{InspectCommand, run_inspect};
 
 #[derive(Debug, Parser)]
 #[command()]
@@ -46,6 +50,8 @@ enum Command {
     Branch(BranchCommand),
     #[command(subcommand, about = "Manage tags")]
     Tag(TagCommand),
+    #[command(subcommand, about = "Print repositories' format files as JSON")]
+    Inspect(InspectCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -289,19 +295,103 @@ async fn open_repository(
         .repos
         .get(repo_alias)
         .context(format!("Repository {repo_alias:?} not found in config"))?;
-    let storage = get_storage(repo).await?;
-    let config = repo.get_config().clone();
-
-    let repository = Repository::open(storage)
-        .config(config)
-        .execute()
-        .await
-        .context(format!("Failed to open repository {repo_alias:?}"))?;
-
-    Ok(repository)
+    open_definition(repo, &repo_alias.0, RepositoryConfig::default()).await
 }
 
-async fn parse_reference(repository: &Repository, reference: &str) -> Result<SnapshotId> {
+async fn open_definition(
+    repo: &RepositoryDefinition,
+    name: &str,
+    overrides: RepositoryConfig,
+) -> Result<Repository> {
+    let storage = get_storage(repo).await?;
+    Repository::open(storage)
+        .config(repo.get_config().merge(overrides))
+        .execute()
+        .await
+        .with_context(|| format!("Failed to open repository {name:?}"))
+}
+
+#[derive(Debug, Args)]
+pub struct Access {
+    #[arg(long, help = "Read s3:// repositories without credentials")]
+    anonymous: bool,
+    #[arg(
+        long,
+        help = "Region of s3:// buckets; defaults to AWS_REGION or AWS_DEFAULT_REGION"
+    )]
+    region: Option<String>,
+}
+
+impl Access {
+    pub(super) fn s3(&self) -> Result<(S3Options, S3Credentials)> {
+        let region = self
+            .region
+            .clone()
+            .or_else(|| std::env::var("AWS_REGION").ok())
+            .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
+            .context("pass --region, or set AWS_REGION, to read s3:// repositories")?;
+        let credentials = if self.anonymous {
+            S3Credentials::Anonymous
+        } else {
+            S3Credentials::FromEnv
+        };
+        Ok((
+            S3Options::default().with_anonymous(self.anonymous).with_region(region),
+            credentials,
+        ))
+    }
+}
+
+/// Opens `repo`, which is a config alias, an `s3://bucket/prefix` URL, or a local
+/// path. Manifests are never preloaded: the inspect commands read only the ones a
+/// row needs.
+pub(super) async fn open_any(
+    repo: &str,
+    config: &CliConfig,
+    access: &Access,
+) -> Result<Repository> {
+    let adhoc;
+    let definition = match config.repos.get(&RepositoryAlias(repo.to_string())) {
+        Some(definition) => definition,
+        None => {
+            adhoc = if let Some(rest) = repo.strip_prefix("s3://") {
+                let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+                let (object_store_config, credentials) = access.s3()?;
+                RepositoryDefinition::S3 {
+                    location: RepoLocation {
+                        bucket: bucket.to_string(),
+                        prefix: Some(prefix.trim_end_matches('/').to_string()),
+                    },
+                    object_store_config,
+                    credentials,
+                    config: RepositoryConfig::default(),
+                }
+            } else {
+                RepositoryDefinition::LocalFileSystem {
+                    path: PathBuf::from(repo),
+                    config: RepositoryConfig::default(),
+                }
+            };
+            &adhoc
+        }
+    };
+    let no_preload = RepositoryConfig {
+        manifest: Some(ManifestConfig {
+            preload: Some(ManifestPreloadConfig {
+                max_total_refs: Some(0),
+                ..ManifestPreloadConfig::default()
+            }),
+            ..ManifestConfig::default()
+        }),
+        ..RepositoryConfig::default()
+    };
+    open_definition(definition, repo, no_preload).await
+}
+
+pub(super) async fn parse_reference(
+    repository: &Repository,
+    reference: &str,
+) -> Result<SnapshotId> {
     if let Ok(snapshot_id) = SnapshotId::try_from(reference) {
         return Ok(snapshot_id);
     }
@@ -636,6 +726,7 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
             delete_branch(&delete_args, &config).await?;
             Ok(())
         }
+        Command::Inspect(inspect_cmd) => run_inspect(&inspect_cmd, &config).await,
         Command::Tag(TagCommand::List(list_args)) => {
             list_tags(&list_args, &config, stdout()).await?;
             Ok(())

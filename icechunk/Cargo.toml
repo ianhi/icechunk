@@ -139,7 +139,7 @@ otel = [
   "dep:opentelemetry-otlp",
   "dep:tracing-opentelemetry",
 ]
-cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs"]
+cli = ["s3", "dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs"]
 shuttle = ["dep:shuttle-tokio", "shuttle-tokio/shuttle"]
 
 [[bin]]
