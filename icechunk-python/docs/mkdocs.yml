@@ -257,6 +257,8 @@ nav:
     - Error Handling: guides/error-handling.md
     - Observability: guides/observability.md
     - Virtual Datasets: guides/virtual.md
+    - Querying Many Repositories: guides/querying-collections.md
+    - "Example: Searching DANDI Recordings": guides/querying-dandi.md
     - Async Usage: guides/async.md
     - Storing Sensitive Data: guides/sensitive-data.md
     - Icechunk for Git Users: guides/icechunk-for-git-users.md
